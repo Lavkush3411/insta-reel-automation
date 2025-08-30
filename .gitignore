@@ -11,3 +11,4 @@ wheels/
 .env
 *.json
 tmp
+*.mp4

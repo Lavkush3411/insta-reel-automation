@@ -8,6 +8,7 @@ from time import sleep
 from instagrapi import Client
 from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
+from instagrapi.exceptions import TwoFactorRequired
 
 PROGRESS_FILE = "progress.json"
 
@@ -28,7 +29,7 @@ UPLOAD_SESSION_FILE="upload_session.json"
 
 async def login_and_save():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)  # show UI for first login
+        browser = await p.chromium.launch(headless=True)  # show UI for first login
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -45,7 +46,7 @@ async def login_and_save():
         await browser.close()
 async def use_existing_session():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(storage_state=COOKIE_FILE)
         page = await context.new_page()
 
@@ -67,7 +68,7 @@ async def scrape_reels(username: str) -> List[Dict[str, str]]:
     reels = []
     url = f"https://www.instagram.com/{username}/reels/"
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(storage_state=COOKIE_FILE)
         page = await context.new_page()
         await page.goto(url, wait_until="domcontentloaded")
@@ -100,7 +101,7 @@ async def download_reel_video(reel_url: str, out_file: str):
 
 def simple_edit(in_file: str, out_file: str):
     clip = VideoFileClip(in_file)
-    txt = TextClip(text="BGMI_MASTERS", font_size=48, color="white")
+    txt = TextClip(text="Gaming_era_in", font_size=48, color="white")
     txt = txt.with_duration(clip.duration).with_position(("center", clip.h - 100))
     CompositeVideoClip([clip, txt]).write_videofile(out_file, codec="libx264", audio_codec="aac")
     return out_file
@@ -124,8 +125,12 @@ def upload_to_ig(video_url: str, caption: str) -> str:
     if os.path.exists(UPLOAD_SESSION_FILE):
         cl.load_settings(UPLOAD_SESSION_FILE)
     else:
-        cl.login(username, password)
-        cl.dump_settings(UPLOAD_SESSION_FILE)    
+        try:
+            cl.login(username, password)
+            cl.dump_settings(UPLOAD_SESSION_FILE)
+        except Exception as e:
+            print(e)
+        
     cl.login(username, password)
     cl.clip_upload(path=video_url, caption=caption+hashtags)
     print(f"Reel Uploaded Successfully")
