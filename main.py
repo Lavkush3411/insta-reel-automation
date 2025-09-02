@@ -3,13 +3,13 @@ from dataclasses import dataclass
 from typing import List, Dict, Any
 from langgraph.graph import StateGraph, END
 from playwright.async_api import async_playwright
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+from moviepy.audio.fx import AudioLoop, MultiplyVolume
 from time import sleep
 from instagrapi import Client
 from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
 from instagrapi.exceptions import TwoFactorRequired
-
 PROGRESS_FILE = "progress.json"
 
 @dataclass
@@ -26,10 +26,62 @@ class State:
     caption:str
 COOKIE_FILE = "session.json"
 UPLOAD_SESSION_FILE="upload_session.json"
+INTRO_CLIP_PATH = "./intro.mp4"   # put your intro clip here
+OUTRO_CLIP_PATH = "./outro.mp4"   # put your outro clip here
+BG_MUSIC_PATH = "./bgm.mp3"
 
+def add_bg_music(main_clip: VideoFileClip, music_path: str, volume: float = 0.1) -> VideoFileClip:
+    """
+    Adds background music to the main video at a low volume.
+    
+    :param main_clip: VideoFileClip, main reel clip
+    :param music_path: str, path to background music
+    :param volume: float, volume multiplier (0.0 to 1.0)
+    :return: VideoFileClip with music
+    """
+    if not os.path.exists(music_path):
+        print("⚠️ Music file not found, skipping bg music")
+        return main_clip
+
+    music = AudioFileClip(music_path)
+    music= music.with_volume_scaled(0.1)
+    # Loop the music if it's shorter than the video
+    if music.duration < main_clip.duration:
+        music_clip = AudioLoop(music, duration=main_clip.duration)
+    else:
+        music_clip = music.with_duration(main_clip.duration)
+
+    if main_clip.audio:
+        final_audio = CompositeAudioClip([main_clip.audio, music_clip])
+    else:
+        final_audio = music
+
+    # Set audio: combine original audio and music
+    final_clip = main_clip.with_audio(final_audio)
+    
+    return final_clip
+
+
+def add_intro_clip(main_clip: VideoFileClip, intro_path: str = INTRO_CLIP_PATH) -> VideoFileClip:
+    if not os.path.exists(intro_path):
+        print("⚠️ Intro clip not found, skipping intro")
+        return main_clip
+    intro = VideoFileClip(intro_path).resized((main_clip.w, main_clip.h)).with_volume_scaled(0.1).with_duration(1)
+    final_clip = concatenate_videoclips([intro, main_clip])
+    print("intro added")
+    return final_clip
+
+def add_outro_clip(main_clip: VideoFileClip, outro_path: str = OUTRO_CLIP_PATH) -> VideoFileClip:
+    if not os.path.exists(outro_path):
+        print("⚠️ Outro clip not found, skipping outro")
+        return main_clip
+    outro = VideoFileClip(outro_path).resized((main_clip.w, main_clip.h)).with_volume_scaled(0.2)
+    final_clip = concatenate_videoclips([main_clip, outro])
+    print("outro added")
+    return final_clip
 async def login_and_save():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)  # show UI for first login
+        browser = await p.chromium.launch(headless=False)  # show UI for first login
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -42,16 +94,6 @@ async def login_and_save():
         # Save cookies & localStorage
         cookies = await context.storage_state(path=COOKIE_FILE)
         print("✅ Session saved to", COOKIE_FILE)
-
-        await browser.close()
-async def use_existing_session():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(storage_state=COOKIE_FILE)
-        page = await context.new_page()
-
-        await page.goto("https://www.instagram.com/s8ul_reacts/reels/")
-        print("✅ Loaded with saved session, should not redirect to login!")
 
         await browser.close()
 
@@ -68,8 +110,11 @@ async def scrape_reels(username: str) -> List[Dict[str, str]]:
     reels = []
     url = f"https://www.instagram.com/{username}/reels/"
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(storage_state=COOKIE_FILE)
+        browser = await p.chromium.launch(headless=False)
+        
+        context = await browser.new_context(storage_state=COOKIE_FILE,  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720})
         page = await context.new_page()
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_selector("a[href*='/reel/']", timeout=20000)
@@ -87,9 +132,12 @@ async def scrape_reels(username: str) -> List[Dict[str, str]]:
 
 async def download_reel_video(reel_url: str, out_file: str):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=
+                                          False)
+        # context = await browser.new_context(storage_state=COOKIE_FILE)
         page = await browser.new_page()
         await page.goto(reel_url, wait_until="networkidle")
+        await page.wait_for_selector("video", timeout=15000)
         video = await page.query_selector("video")
         src = await video.get_attribute("src")
         r = requests.get(src, stream=True)
@@ -100,7 +148,15 @@ async def download_reel_video(reel_url: str, out_file: str):
     return out_file
 
 def simple_edit(in_file: str, out_file: str):
+
+
     clip = VideoFileClip(in_file)
+
+    clip = add_intro_clip(clip)
+    clip = add_outro_clip(clip)
+    
+    # Add background music
+    clip = add_bg_music(clip, BG_MUSIC_PATH, volume=0.1)
     txt = TextClip(text="Gaming_era_in", font_size=48, color="white")
     txt = txt.with_duration(clip.duration).with_position(("center", clip.h - 100))
     CompositeVideoClip([clip, txt]).write_videofile(out_file, codec="libx264", audio_codec="aac")
@@ -169,7 +225,7 @@ def node_edit_reel(state: State) -> State:
 
 def node_upload_reel(state: State) -> State:
     # simulate upload (replace with IG API call)
-    state.uploaded_id = upload_to_ig(state.edited_file, f"Repost from {state.chosen_creator}")
+    state.uploaded_id = upload_to_ig(state.edited_file, f"Repost from @{state.chosen_creator} ")
     return state
 
 def node_save_progress(state: State) -> State:
@@ -213,17 +269,19 @@ if __name__=="__main__":
 
     asyncio.run(ensure_session())
     # ----------------- RUN -----------------
-    init_state = State(
-        creators=["s8ul_reacts","ig_hunter.op.gaming","gamezy.meme","disaster_b.t","aarav.reacts","madeehdard","casetoomoments"],  # Example public creators
-        chosen_creator=None,
-        reel_list=[],
-        chosen_reel=None,
-        downloaded_file=None,
-        edited_file=None,
-        uploaded_id=None,
-        progress=load_progress(),
-        errors=[],
-        caption=''
-    )
-    result = asyncio.run(graph.ainvoke(init_state))
-    print(result)
+    while True:
+        init_state = State(
+            creators=["s8ul_reacts","ig_hunter.op.gaming","gamezy.meme","disaster_b.t","aarav.reacts","madeehdard","casetoomoments"],  # Example public creators
+            chosen_creator=None,
+            reel_list=[],
+            chosen_reel=None,
+            downloaded_file=None,
+            edited_file=None,
+            uploaded_id=None,
+            progress=load_progress(),
+            errors=[],
+            caption=''
+        )
+        result = asyncio.run(graph.ainvoke(init_state))
+        print(result)
+        sleep(900)
