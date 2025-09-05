@@ -152,7 +152,7 @@ def simple_edit(in_file: str, out_file: str):
 
     clip = VideoFileClip(in_file)
 
-    clip = add_intro_clip(clip)
+    # clip = add_intro_clip(clip)
     clip = add_outro_clip(clip)
     
     # Add background music
@@ -194,6 +194,13 @@ def upload_to_ig(video_url: str, caption: str) -> str:
     return "uploaded"
 
 # ----------------- NODES -----------------
+
+def should_continue_or_refetch(state:State):
+    if state.chosen_reel:
+        return 'continue'
+    else :
+        return 'refetch'
+    pass
 def node_choose_creator(state: State) -> State:
     state.chosen_creator = random.choice(state.creators)
     return state
@@ -209,7 +216,10 @@ def node_pick_next_reel(state: State) -> State:
         if reel["shortcode"] not in uploaded:
             state.chosen_reel = reel
             return state
-    state.errors.append("No new reels left")
+    # state.errors.append("No new reels left")
+    choosen_creator= state.chosen_creator
+    state.creators.remove(choosen_creator)
+    state.chosen_reel=None
     return state
 
 async def node_download_reel(state: State) -> State:
@@ -247,7 +257,7 @@ builder.add_node("save_progress", node_save_progress)
 builder.set_entry_point("choose_creator")
 builder.add_edge("choose_creator", "fetch_reels")
 builder.add_edge("fetch_reels", "pick_next")
-builder.add_edge("pick_next", "download")
+builder.add_conditional_edges("pick_next",should_continue_or_refetch,{'continue':"download", 'refetch':"choose_creator"})
 builder.add_edge("download", "edit")
 builder.add_edge("edit", "upload")
 builder.add_edge("upload", "save_progress")
@@ -269,7 +279,9 @@ if __name__=="__main__":
 
     asyncio.run(ensure_session())
     # ----------------- RUN -----------------
-    while True:
+    total=1
+    i=0
+    while i<total:
         init_state = State(
             creators=["s8ul_reacts","ig_hunter.op.gaming","gamezy.meme","disaster_b.t","aarav.reacts","madeehdard","casetoomoments"],  # Example public creators
             chosen_creator=None,
@@ -283,5 +295,9 @@ if __name__=="__main__":
             caption=''
         )
         result = asyncio.run(graph.ainvoke(init_state))
-        print(result)
+        print("success")
+        i+=1
+        if total==1:
+            break
         sleep(900)
+        
